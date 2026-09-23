@@ -71,6 +71,7 @@ import { readLimiter, mutationLimiter } from './utils';
 import { maintainerLimiter } from './middleware/maintainerLimiter';
 import { logger } from './logger';
 import { createAdminApiKeyAuthMiddleware } from './middleware/adminAuth';
+import { createTerminalErrorHandler } from './middleware/errors';
 import { handleGitHubPrEvent } from './webhooks/githubPrHandler';
 import { draining } from './shutdown';
 import { applyBountyTemplate, listBountyTemplates } from './services/bountyTemplates';
@@ -1238,3 +1239,7 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   }
   next(err);
 });
+
+// Must stay last: renders typed middleware errors and turns anything else into
+// a generic 500 so no raw dependency error or stack trace reaches a client.
+app.use(createTerminalErrorHandler());

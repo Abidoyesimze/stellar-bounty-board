@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import type { RequestHandler } from "express";
+import { MiddlewareDependencyError } from "./errors";
 
 const HEADER_ADMIN_KEY = "x-admin-api-key";
 const ENV_ADMIN_KEY_HASH = "ADMIN_API_KEY_HASH";
@@ -41,8 +42,18 @@ export function createAdminApiKeyAuthMiddleware(): RequestHandler {
     let match: boolean;
     try {
       match = await bcrypt.compare(incomingKey, storedHash);
-    } catch {
-      res.status(500).json({ error: "Failed to verify admin API key." });
+    } catch (err) {
+      // A malformed stored hash or bcrypt failure is a server fault; keep the
+      // cause for the logs and send the client a fixed message.
+      next(
+        new MiddlewareDependencyError({
+          operation: "admin_api_key.compare",
+          dependency: "bcrypt",
+          statusCode: 500,
+          publicMessage: "Failed to verify admin API key.",
+          cause: err,
+        }),
+      );
       return;
     }
 
