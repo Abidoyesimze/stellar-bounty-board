@@ -72,8 +72,9 @@ async function releaseQuietly(release: () => Promise<void>, storePath: string): 
  * Timestamps are persisted as JSON at `MAINTAINER_RATE_LIMIT_STORE_PATH`, or
  * `maintainer_rate_limits.json` beside `BOUNTY_STORE_PATH`, or
  * `./data/maintainer_rate_limits.json`. The file and its directory are
- * created when missing. An unparseable file is treated as empty and
- * overwritten on the next write.
+ * created when missing. A file that is unparseable or not a JSON object is
+ * treated as empty and overwritten on the next write; a malformed entry for a
+ * maintainer is treated as having no prior requests.
  *
  * Never throws and never rejects. Dependency failures go to `next()` as a
  * {@link MiddlewareDependencyError}:
@@ -132,7 +133,12 @@ export const maintainerLimiter: RequestHandler = async (req: Request, res: Respo
     const raw = fs.readFileSync(storePath, "utf8");
     let store: Record<string, RateLimitRecord> = {};
     try {
-      store = JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw);
+      // Valid JSON that is not an object (null, a number, an array) would
+      // either throw on lookup or silently drop writes, disabling the limit.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        store = parsed as Record<string, RateLimitRecord>;
+      }
     } catch {
       // Ignore parse error and start fresh
     }
@@ -140,7 +146,12 @@ export const maintainerLimiter: RequestHandler = async (req: Request, res: Respo
     const now = Date.now();
     const windowStart = now - WINDOW_MS;
 
-    const record = store[maintainer] || { timestamps: [] };
+    const existing = store[maintainer];
+    const record: RateLimitRecord = {
+      timestamps: Array.isArray(existing?.timestamps)
+        ? existing.timestamps.filter((ts): ts is number => typeof ts === "number")
+        : [],
+    };
 
     // Clean up old timestamps
     record.timestamps = record.timestamps.filter((ts) => ts > windowStart);
