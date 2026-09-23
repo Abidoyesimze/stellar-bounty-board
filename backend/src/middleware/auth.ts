@@ -72,6 +72,32 @@ function verifyStellarSignature(publicKey: string, payload: Buffer, signatureHea
   return false;
 }
 
+/**
+ * Verifies that a bounty-creation request was signed by the maintainer named
+ * in its body.
+ *
+ * The signed message is the UTF-8 JSON of
+ * `{ repo, issueNumber, amount, tokenSymbol, deadline }` in that key order,
+ * where `deadline` is taken from `body.deadlineDays`. The signature comes from
+ * the `x-stellar-signature` header, as hex or base64, optionally prefixed with
+ * `0x`, `sig=` or `signature=`. It is checked against `body.maintainer`.
+ *
+ * Must run after `express.json()`. Skipped entirely (calls `next()`) when
+ * `NODE_ENV === "test"`.
+ *
+ * Responds 401 when the header is missing, `body.maintainer` is missing or
+ * not a string, or the signature does not verify (including when
+ * `maintainer` is not a valid Stellar public key).
+ *
+ * Never throws and never calls `next(err)`; key-parsing and verification
+ * errors from the Stellar SDK are treated as a failed verification.
+ *
+ * Concurrency: stateless. Unlike {@link createStellarSignatureAuthMiddleware},
+ * there is no replay protection or timestamp check; duplicate creates are
+ * handled downstream.
+ *
+ * @returns A synchronous Express middleware.
+ */
 export function createBountyCreationSignatureMiddleware(): RequestHandler {
   return (req, res, next) => {
     if (process.env.NODE_ENV === "test") {
@@ -136,6 +162,41 @@ class NonceCache {
 
 const nonceCache = new NonceCache();
 
+/**
+ * Authenticates maintainer actions on an existing bounty (routes with an
+ * `:id` param, such as release and refund) using a Stellar signature.
+ *
+ * Checks, in order, responding 401 on the first failure unless noted:
+ *  1. At least one key is configured in `MAINTAINER_PUBLIC_KEYS`
+ *     (comma-separated) or `MAINTAINER_PUBLIC_KEY`. Responds 500 if not.
+ *  2. `x-stellar-signature` and `x-stellar-public-key` headers are present.
+ *  3. The public key is in the configured list.
+ *  4. `body.action` and `body.bountyId` are non-empty strings, and
+ *     `body.bountyId === req.params.id`.
+ *  5. `body.timestamp` is a number (Unix seconds) within 60s of server time,
+ *     in either direction.
+ *  6. The signature has not been seen in the last 60s (replay protection).
+ *  7. The signature verifies over the raw request body (`req.rawBody`, set by
+ *     the `express.json` `verify` hook), falling back to `JSON.stringify(body)`
+ *     and then to `"<METHOD> <originalUrl>"` when there is no body.
+ *  8. If `body.maintainer` is a string, it equals the signer public key.
+ *
+ * On success sets `req.signerPublicKey` and calls `next()`. Skipped entirely
+ * (calls `next()`) when `NODE_ENV === "test"`. Configuration is read from the
+ * environment on every request.
+ *
+ * Never throws and never calls `next(err)`; SDK errors count as a failed
+ * verification.
+ *
+ * Concurrency: the replay cache is a module-level in-memory `Map` shared by
+ * every middleware instance in the process. Check-and-insert is synchronous,
+ * so it is race-free within one process, but it is **not** shared across
+ * processes or replicas, and is empty after a restart. A signature is recorded
+ * as used once it verifies, before the maintainer check in step 8, so a
+ * request rejected at step 8 cannot be retried with the same signature.
+ *
+ * @returns A synchronous Express middleware.
+ */
 export function createStellarSignatureAuthMiddleware(): RequestHandler {
   return (req, res, next) => {
     if (process.env.NODE_ENV === "test") {

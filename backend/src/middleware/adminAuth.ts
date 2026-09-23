@@ -15,9 +15,20 @@ const ENV_ADMIN_KEY_HASH = "ADMIN_API_KEY_HASH";
  * middleware compares it with `bcrypt.compare()` so the plaintext key is
  * never stored or logged.
  *
+ * Skipped entirely (calls `next()`) when `NODE_ENV === "test"`.
+ *
  * Responds with:
  *  - 500 if `ADMIN_API_KEY_HASH` is not configured on the server.
  *  - 401 if the header is missing or the key does not match the hash.
+ *
+ * Never throws. If `bcrypt.compare()` rejects (e.g. a malformed stored hash),
+ * it calls `next()` with a {@link MiddlewareDependencyError} (operation
+ * `admin_api_key.compare`, status 500); the terminal error handler renders it.
+ *
+ * Concurrency: stateless; `ADMIN_API_KEY_HASH` is read on every request, so
+ * rotating it takes effect without a restart.
+ *
+ * @returns An async Express middleware.
  */
 export function createAdminApiKeyAuthMiddleware(): RequestHandler {
   return async (req, res, next) => {
